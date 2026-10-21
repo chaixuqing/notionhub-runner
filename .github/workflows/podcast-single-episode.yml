@@ -44,18 +44,16 @@ jobs:
         env:
           SYNC_ENV_B64: ${{ github.event.inputs.sync_env_b64 }}
         run: |
-          using: 'node24'
           set -euo pipefail
           python -m pip install --upgrade pip
           INSTALL_TOKEN=$(python3 -c "import json, base64, os; data=json.loads(base64.b64decode(os.environ.get('SYNC_ENV_B64', 'e30='))); print(data.get('GITHUB_PAT') or data.get('INSTALL_TOKEN') or '')")
-          if [ -n "$INSTALL_TOKEN" ]; then
-            echo "::add-mask::$INSTALL_TOKEN"
-            pip install --quiet --disable-pip-version-check "git+https://${INSTALL_TOKEN}@github.com/malinkang/notionhub-core.git"
-            pip install --quiet --disable-pip-version-check "git+https://${INSTALL_TOKEN}@github.com/malinkang/Podcast2NotionProNew.git"
-          else
-            pip install --quiet --disable-pip-version-check "git+https://github.com/malinkang/notionhub-core.git"
-            pip install --quiet --disable-pip-version-check "git+https://github.com/malinkang/Podcast2NotionProNew.git"
+          if [ -z "$INSTALL_TOKEN" ]; then
+            echo "::error title=缺少安装令牌::请在 sync_env_b64 中提供 GITHUB_PAT 或 INSTALL_TOKEN。"
+            exit 1
           fi
+          echo "::add-mask::$INSTALL_TOKEN"
+          pip install --quiet --disable-pip-version-check "git+https://x-access-token:${INSTALL_TOKEN}@github.com/malinkang/notionhub-core.git"
+          pip install --quiet --disable-pip-version-check "git+https://x-access-token:${INSTALL_TOKEN}@github.com/malinkang/Podcast2NotionProNew.git"
 
       - name: 运行小宇宙单集同步
         env:

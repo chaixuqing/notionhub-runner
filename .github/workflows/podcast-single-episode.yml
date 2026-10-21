@@ -47,23 +47,13 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           INSTALL_TOKEN=$(python3 -c "import json, base64, os; data=json.loads(base64.b64decode(os.environ.get('SYNC_ENV_B64', 'e30='))); print(data.get('GITHUB_PAT') or data.get('INSTALL_TOKEN') or '')")
-          install_from_token() {
-            pip install --quiet --disable-pip-version-check "git+https://x-access-token:${INSTALL_TOKEN}@github.com/malinkang/notionhub-core.git"
-            pip install --quiet --disable-pip-version-check "git+https://x-access-token:${INSTALL_TOKEN}@github.com/malinkang/Podcast2NotionProNew.git"
-          }
-          install_from_public_repo() {
-            pip install --quiet --disable-pip-version-check "git+https://github.com/malinkang/notionhub-core.git"
-            pip install --quiet --disable-pip-version-check "git+https://github.com/malinkang/Podcast2NotionProNew.git"
-          }
-          if [ -n "$INSTALL_TOKEN" ]; then
-            echo "::add-mask::$INSTALL_TOKEN"
-            if ! install_from_token; then
-              echo "::warning title=安装令牌不可用::回退到公开仓库安装依赖。"
-              install_from_public_repo
-            fi
-          else
-            install_from_public_repo
+          if [ -z "$INSTALL_TOKEN" ]; then
+            echo "::error title=缺少安装令牌::请在 sync_env_b64 中提供 GITHUB_PAT 或 INSTALL_TOKEN。"
+            exit 1
           fi
+          echo "::add-mask::$INSTALL_TOKEN"
+          pip install --quiet --disable-pip-version-check "git+https://x-access-token:${INSTALL_TOKEN}@github.com/malinkang/notionhub-core.git"
+          pip install --quiet --disable-pip-version-check "git+https://x-access-token:${INSTALL_TOKEN}@github.com/malinkang/Podcast2NotionProNew.git"
 
       - name: 运行小宇宙单集同步
         env:

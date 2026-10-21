@@ -44,17 +44,25 @@ jobs:
         env:
           SYNC_ENV_B64: ${{ github.event.inputs.sync_env_b64 }}
         run: |
-          using: 'node24'
           set -euo pipefail
           python -m pip install --upgrade pip
           INSTALL_TOKEN=$(python3 -c "import json, base64, os; data=json.loads(base64.b64decode(os.environ.get('SYNC_ENV_B64', 'e30='))); print(data.get('GITHUB_PAT') or data.get('INSTALL_TOKEN') or '')")
-          if [ -n "$INSTALL_TOKEN" ]; then
-            echo "::add-mask::$INSTALL_TOKEN"
-            pip install --quiet --disable-pip-version-check "git+https://${INSTALL_TOKEN}@github.com/malinkang/notionhub-core.git"
-            pip install --quiet --disable-pip-version-check "git+https://${INSTALL_TOKEN}@github.com/malinkang/Podcast2NotionProNew.git"
-          else
+          install_from_token() {
+            pip install --quiet --disable-pip-version-check "git+https://x-access-token:${INSTALL_TOKEN}@github.com/malinkang/notionhub-core.git"
+            pip install --quiet --disable-pip-version-check "git+https://x-access-token:${INSTALL_TOKEN}@github.com/malinkang/Podcast2NotionProNew.git"
+          }
+          install_from_public_repo() {
             pip install --quiet --disable-pip-version-check "git+https://github.com/malinkang/notionhub-core.git"
             pip install --quiet --disable-pip-version-check "git+https://github.com/malinkang/Podcast2NotionProNew.git"
+          }
+          if [ -n "$INSTALL_TOKEN" ]; then
+            echo "::add-mask::$INSTALL_TOKEN"
+            if ! install_from_token; then
+              echo "::warning title=安装令牌不可用::回退到公开仓库安装依赖。"
+              install_from_public_repo
+            fi
+          else
+            install_from_public_repo
           fi
 
       - name: 运行小宇宙单集同步

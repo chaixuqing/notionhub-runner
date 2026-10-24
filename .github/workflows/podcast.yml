@@ -47,12 +47,31 @@ jobs:
       PODCAST_CONFIG: ${{ secrets.PODCAST_CONFIG }}
       NOTIONHUB_API_BASE: https://i.notionhub.app/v1
       NOTIONHUB_SERVICE: podcast
-      NOTIONHUB_CONFIG_VERSION: '51'
+      NOTIONHUB_CONFIG_VERSION: '52'
       SYNC_POLICY_STATE_PATH: ${{ github.workspace }}/notionhub-state.json
       SYNC_POLICY_CONTINUATION_PATH: ${{ github.workspace }}/notionhub-continuation-id
       SYNC_POLICY_REPORT_PATH: ${{ github.workspace }}/notionhub-service-report.json
       NOTIONHUB_RUN_META_PATH: ${{ github.workspace }}/notionhub-run-meta.json
+      NOTIONHUB_TARGET_RESULTS_PATH: ${{ github.workspace }}/notionhub-target-results.json
     steps:
+      - name: 清理历史同步临时文件
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${GITHUB_WORKSPACE:?GitHub workspace is required}"
+          rm -f -- \
+            "$GITHUB_WORKSPACE/notionhub-state.json" \
+            "$GITHUB_WORKSPACE/notionhub-continuation-id" \
+            "$GITHUB_WORKSPACE/notionhub-run-meta.json" \
+            "$GITHUB_WORKSPACE/notionhub-target-results.json" \
+            "$GITHUB_WORKSPACE/notionhub-service-report.json" \
+            "$GITHUB_WORKSPACE/notionhub-final.json"
+          shopt -s nullglob
+          for STAGE_FILE in "$GITHUB_WORKSPACE"/notionhub-stage-*.json; do
+            rm -f -- "$STAGE_FILE"
+          done
+          rm -rf -- "$GITHUB_WORKSPACE/notionhub-artifacts"
+
       - name: 验证运行配置
         id: activation
         env:
@@ -63,21 +82,7 @@ jobs:
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          PLAN=$(printf '%s' "$SERVICE_CONFIG" | jq -r '.PODCAST_SYNC_PLAN // "lifetime"')
-          REMAINING=$(printf '%s' "$SERVICE_CONFIG" | jq -r '.PODCAST_TRIAL_RUNS_REMAINING // 1')
-          if [ "$PLAN" = "trial" ] && { ! [[ "$REMAINING" =~ ^[0-9]+$ ]] || [ "$REMAINING" -le 0 ]; }; then
-            echo "免费体验次数已用完，请购买激活码。"
-            echo "获取激活码：https://www.notionhub.app/docs/get-activation-code.html"
-            {
-              echo "## 免费体验次数已用完"
-              echo ""
-              echo "请购买激活码并在 NotionHub 插件中完成激活后重新同步。"
-              echo ""
-              echo "[查看如何获取激活码](https://www.notionhub.app/docs/get-activation-code.html)"
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error title=免费体验次数已用完::免费体验次数已用完，请购买激活码并在 NotionHub 插件中完成激活后重新同步。%0A%0A获取激活码：https://www.notionhub.app/docs/get-activation-code.html"
-            exit 1
-          fi
+
           echo "enabled=true" >> "$GITHUB_OUTPUT"
 
       - name: 验证权限并获取运行程序
@@ -96,7 +101,7 @@ jobs:
           RUNTIME_ARCHIVE="$RUNNER_TEMP/notionhub-runner.tar.gz"
           cleanup_runtime_files() { rm -f "$RUNTIME_RESPONSE" "$RUNTIME_METADATA" "$RUNTIME_ARCHIVE"; }
           trap cleanup_runtime_files EXIT
-          HTTP_STATUS=$(curl -sS -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
+          HTTP_STATUS=$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
           if [ "$HTTP_STATUS" = "418" ]; then
             echo "免费体验次数已用完，请购买激活码。"
             echo "获取激活码：https://www.notionhub.app/docs/get-activation-code.html"
@@ -248,7 +253,14 @@ jobs:
           Path(os.environ['SYNC_POLICY_STATE_PATH']).write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
           PY
           printf '%s' "$NOTIONHUB_POLICY_ID" > "$SYNC_POLICY_CONTINUATION_PATH"
-          jq -cn             --arg requested "$NOTIONHUB_REQUESTED_SYNC_MODE"             --arg effective "$NOTIONHUB_EFFECTIVE_SYNC_MODE"             --argjson initialFullSyncForced "${NOTIONHUB_INITIAL_FULL_SYNC_FORCED:-false}"             '{requestedMode:$requested,effectiveMode:$effective,initialFullSyncForced:$initialFullSyncForced}'             > "$NOTIONHUB_RUN_META_PATH"
+          RAW_CONFIG="${PODCAST_CONFIG:-$SERVICE_CONFIG}"
+          SAFE_CONFIG=$(printf '%s' "$RAW_CONFIG" | jq -c '{
+            ("PODCAST_SYNC_PLAN"): (."PODCAST_SYNC_PLAN" // null),
+            ("PODCAST_SERVICE_OPTIONS"): (."PODCAST_SERVICE_OPTIONS" // null),
+            ("PODCAST_INITIAL_FULL_SYNC_REQUIRED"): (."PODCAST_INITIAL_FULL_SYNC_REQUIRED" // null),
+            ("PODCAST_UPLOAD_FILES"): (."PODCAST_UPLOAD_FILES" // null)
+          } | with_entries(select(.value != null))' 2>/dev/null || echo '{}')
+          jq -cn             --arg requested "$NOTIONHUB_REQUESTED_SYNC_MODE"             --arg effective "$NOTIONHUB_EFFECTIVE_SYNC_MODE"             --argjson initialFullSyncForced "${NOTIONHUB_INITIAL_FULL_SYNC_FORCED:-false}"             --argjson serviceConfig "$SAFE_CONFIG"             '{requestedMode:$requested,effectiveMode:$effective,initialFullSyncForced:$initialFullSyncForced,serviceConfig:$serviceConfig}'             > "$NOTIONHUB_RUN_META_PATH"
 
       - name: 检查同步小宇宙数据配置
         id: job_config
@@ -375,12 +387,31 @@ jobs:
       PODCAST_CONFIG: ${{ secrets.PODCAST_CONFIG }}
       NOTIONHUB_API_BASE: https://i.notionhub.app/v1
       NOTIONHUB_SERVICE: podcast
-      NOTIONHUB_CONFIG_VERSION: '51'
+      NOTIONHUB_CONFIG_VERSION: '52'
       SYNC_POLICY_STATE_PATH: ${{ github.workspace }}/notionhub-state.json
       SYNC_POLICY_CONTINUATION_PATH: ${{ github.workspace }}/notionhub-continuation-id
       SYNC_POLICY_REPORT_PATH: ${{ github.workspace }}/notionhub-service-report.json
       NOTIONHUB_RUN_META_PATH: ${{ github.workspace }}/notionhub-run-meta.json
+      NOTIONHUB_TARGET_RESULTS_PATH: ${{ github.workspace }}/notionhub-target-results.json
     steps:
+      - name: 清理历史同步临时文件
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${GITHUB_WORKSPACE:?GitHub workspace is required}"
+          rm -f -- \
+            "$GITHUB_WORKSPACE/notionhub-state.json" \
+            "$GITHUB_WORKSPACE/notionhub-continuation-id" \
+            "$GITHUB_WORKSPACE/notionhub-run-meta.json" \
+            "$GITHUB_WORKSPACE/notionhub-target-results.json" \
+            "$GITHUB_WORKSPACE/notionhub-service-report.json" \
+            "$GITHUB_WORKSPACE/notionhub-final.json"
+          shopt -s nullglob
+          for STAGE_FILE in "$GITHUB_WORKSPACE"/notionhub-stage-*.json; do
+            rm -f -- "$STAGE_FILE"
+          done
+          rm -rf -- "$GITHUB_WORKSPACE/notionhub-artifacts"
+
       - name: 恢复上一阶段进度
         id: restore
         if: needs.data.outputs.enabled == 'true' && needs.data.result == 'success'
@@ -510,7 +541,7 @@ jobs:
           RUNTIME_ARCHIVE="$RUNNER_TEMP/notionhub-runner.tar.gz"
           cleanup_runtime_files() { rm -f "$RUNTIME_RESPONSE" "$RUNTIME_METADATA" "$RUNTIME_ARCHIVE"; }
           trap cleanup_runtime_files EXIT
-          HTTP_STATUS=$(curl -sS -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
+          HTTP_STATUS=$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
           if [ "$HTTP_STATUS" = "418" ]; then
             echo "免费体验次数已用完，请购买激活码。"
             echo "获取激活码：https://www.notionhub.app/docs/get-activation-code.html"
@@ -729,12 +760,31 @@ jobs:
       PODCAST_CONFIG: ${{ secrets.PODCAST_CONFIG }}
       NOTIONHUB_API_BASE: https://i.notionhub.app/v1
       NOTIONHUB_SERVICE: podcast
-      NOTIONHUB_CONFIG_VERSION: '51'
+      NOTIONHUB_CONFIG_VERSION: '52'
       SYNC_POLICY_STATE_PATH: ${{ github.workspace }}/notionhub-state.json
       SYNC_POLICY_CONTINUATION_PATH: ${{ github.workspace }}/notionhub-continuation-id
       SYNC_POLICY_REPORT_PATH: ${{ github.workspace }}/notionhub-service-report.json
       NOTIONHUB_RUN_META_PATH: ${{ github.workspace }}/notionhub-run-meta.json
+      NOTIONHUB_TARGET_RESULTS_PATH: ${{ github.workspace }}/notionhub-target-results.json
     steps:
+      - name: 清理历史同步临时文件
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${GITHUB_WORKSPACE:?GitHub workspace is required}"
+          rm -f -- \
+            "$GITHUB_WORKSPACE/notionhub-state.json" \
+            "$GITHUB_WORKSPACE/notionhub-continuation-id" \
+            "$GITHUB_WORKSPACE/notionhub-run-meta.json" \
+            "$GITHUB_WORKSPACE/notionhub-target-results.json" \
+            "$GITHUB_WORKSPACE/notionhub-service-report.json" \
+            "$GITHUB_WORKSPACE/notionhub-final.json"
+          shopt -s nullglob
+          for STAGE_FILE in "$GITHUB_WORKSPACE"/notionhub-stage-*.json; do
+            rm -f -- "$STAGE_FILE"
+          done
+          rm -rf -- "$GITHUB_WORKSPACE/notionhub-artifacts"
+
       - name: 恢复上一阶段进度
         id: restore
         if: needs.data.outputs.enabled == 'true' && needs.transcription.result == 'success'
@@ -867,7 +917,7 @@ jobs:
           RUNTIME_ARCHIVE="$RUNNER_TEMP/notionhub-runner.tar.gz"
           cleanup_runtime_files() { rm -f "$RUNTIME_RESPONSE" "$RUNTIME_METADATA" "$RUNTIME_ARCHIVE"; }
           trap cleanup_runtime_files EXIT
-          HTTP_STATUS=$(curl -sS -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
+          HTTP_STATUS=$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
           if [ "$HTTP_STATUS" = "418" ]; then
             echo "免费体验次数已用完，请购买激活码。"
             echo "获取激活码：https://www.notionhub.app/docs/get-activation-code.html"
@@ -1085,12 +1135,31 @@ jobs:
       PODCAST_CONFIG: ${{ secrets.PODCAST_CONFIG }}
       NOTIONHUB_API_BASE: https://i.notionhub.app/v1
       NOTIONHUB_SERVICE: podcast
-      NOTIONHUB_CONFIG_VERSION: '51'
+      NOTIONHUB_CONFIG_VERSION: '52'
       SYNC_POLICY_STATE_PATH: ${{ github.workspace }}/notionhub-state.json
       SYNC_POLICY_CONTINUATION_PATH: ${{ github.workspace }}/notionhub-continuation-id
       SYNC_POLICY_REPORT_PATH: ${{ github.workspace }}/notionhub-service-report.json
       NOTIONHUB_RUN_META_PATH: ${{ github.workspace }}/notionhub-run-meta.json
+      NOTIONHUB_TARGET_RESULTS_PATH: ${{ github.workspace }}/notionhub-target-results.json
     steps:
+      - name: 清理历史同步临时文件
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${GITHUB_WORKSPACE:?GitHub workspace is required}"
+          rm -f -- \
+            "$GITHUB_WORKSPACE/notionhub-state.json" \
+            "$GITHUB_WORKSPACE/notionhub-continuation-id" \
+            "$GITHUB_WORKSPACE/notionhub-run-meta.json" \
+            "$GITHUB_WORKSPACE/notionhub-target-results.json" \
+            "$GITHUB_WORKSPACE/notionhub-service-report.json" \
+            "$GITHUB_WORKSPACE/notionhub-final.json"
+          shopt -s nullglob
+          for STAGE_FILE in "$GITHUB_WORKSPACE"/notionhub-stage-*.json; do
+            rm -f -- "$STAGE_FILE"
+          done
+          rm -rf -- "$GITHUB_WORKSPACE/notionhub-artifacts"
+
       - name: 恢复上一阶段进度
         id: restore
         if: needs.data.outputs.enabled == 'true' && needs.transcript_backfill.result == 'success'
@@ -1195,6 +1264,10 @@ jobs:
           JOB_ENABLED=true
           SKIP_REASON=""
           UPLOAD_FILES=$(printf '%s' "$SERVICE_CONFIG" | jq -r '.PODCAST_UPLOAD_FILES // "false"')
+          if [ -n "${NOTIONHUB_RUN_META_PATH:-}" ] && [ -f "${NOTIONHUB_RUN_META_PATH:-}" ]; then
+            META_UPLOAD_FILES=$(jq -r '.serviceConfig.PODCAST_UPLOAD_FILES // empty' "$NOTIONHUB_RUN_META_PATH" 2>/dev/null || echo "")
+            if [ -n "$META_UPLOAD_FILES" ]; then UPLOAD_FILES="$META_UPLOAD_FILES"; fi
+          fi
           if [ "$UPLOAD_FILES" != "true" ]; then
             JOB_ENABLED=false
             SKIP_REASON="未开启文件上传"
@@ -1227,7 +1300,7 @@ jobs:
           RUNTIME_ARCHIVE="$RUNNER_TEMP/notionhub-runner.tar.gz"
           cleanup_runtime_files() { rm -f "$RUNTIME_RESPONSE" "$RUNTIME_METADATA" "$RUNTIME_ARCHIVE"; }
           trap cleanup_runtime_files EXIT
-          HTTP_STATUS=$(curl -sS -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
+          HTTP_STATUS=$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
           if [ "$HTTP_STATUS" = "418" ]; then
             echo "免费体验次数已用完，请购买激活码。"
             echo "获取激活码：https://www.notionhub.app/docs/get-activation-code.html"
@@ -1664,7 +1737,7 @@ jobs:
           RUNTIME_ARCHIVE="$RUNNER_TEMP/notionhub-runner.tar.gz"
           cleanup_runtime_files() { rm -f "$RUNTIME_RESPONSE" "$RUNTIME_METADATA" "$RUNTIME_ARCHIVE"; }
           trap cleanup_runtime_files EXIT
-          HTTP_STATUS=$(curl -sS -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
+          HTTP_STATUS=$(curl -sS --retry 3 --retry-all-errors --retry-delay 2 -o "$RUNTIME_RESPONSE" -w '%{http_code}' -X POST "$NOTIONHUB_API_BASE/github/runner/runtime-bundle"             -H "Authorization: Bearer $OIDC_TOKEN" -H 'Content-Type: application/json' --data "$RUNTIME_PAYLOAD")
           if [ "$HTTP_STATUS" = "418" ]; then
             echo "免费体验次数已用完，请购买激活码。"
             echo "获取激活码：https://www.notionhub.app/docs/get-activation-code.html"

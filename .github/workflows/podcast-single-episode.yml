@@ -44,7 +44,6 @@ jobs:
         env:
           SYNC_ENV_B64: ${{ github.event.inputs.sync_env_b64 }}
         run: |
-          using: 'node24'
           set -euo pipefail
           python -m pip install --quiet --disable-pip-version-check --upgrade pip
 
